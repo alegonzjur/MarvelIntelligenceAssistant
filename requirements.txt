@@ -1,0 +1,16 @@
+langchain
+langchain-community
+langchain-ollama
+chromadb
+sentence-transformers
+sqlalchemy
+pandas
+fastapi
+uvicorn
+streamlit
+mlflow
+ragas
+pytest
+python-dotenv
+pydantic
+seaborn

@@ -1,0 +1,55 @@
+# --- Entorno Python / conda ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.Python
+env/
+venv/
+.venv/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Datos generados (NO subir a git, sí versionar con DVC si lo añades) ---
+data/processed/*.db
+data/vectorstore/
+!data/vectorstore/.gitkeep
+
+# --- Datos crudos: opcional ---
+# Si el dataset es público y pequeño (161 filas), puedes SUBIR los CSV crudos
+# a git sin problema — ayuda a que el repo sea reproducible sin depender de
+# Kaggle. Si prefieres no subirlos, descomenta:
+# data/raw/*.csv
+
+# --- MLflow ---
+mlflow/mlruns/
+mlflow/mlartifacts/
+mlflow.db
+
+# --- Modelos / cachés locales (Ollama, sentence-transformers) ---
+*.gguf
+.cache/
+models/
+
+# --- Variables de entorno / secretos ---
+.env
+*.env.local
+
+# --- Docker ---
+docker/*.log
+
+# --- Sistema operativo / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# --- Tests / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Logs varios ---
+*.log
