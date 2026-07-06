@@ -36,14 +36,14 @@ CAST_CSV = RAW_DIR / "marvel_cast.csv"
 
 
 # Función de validación de join keys.
-def validate_join_keys(master: df.DataFrame, child: pd.DataFrame, name: str) -> None:
+def validate_join_keys(master: pd.DataFrame, child: pd.DataFrame, name: str) -> None:
     """
     Valida que las claves de unión (title, year) sean únicas en master
     y que todas las claves de child estén en master.
     """
     master_keys = set(zip(master["title"], master["year"]))
     child_keys = set(zip(child["title"], child["year"]))
-    
+    orphans = child_keys - master_keys
     # Verificación que las claves childs están en master.
     if orphans:
         raise ValueError(
