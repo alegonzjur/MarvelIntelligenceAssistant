@@ -35,7 +35,7 @@ METADATA_COLUMNS = [
     "year",
     "type",
     "mcu_phase",
-    "is_mcu_phase",
+    "is_mcu_canon",
     "universe"
 ]
 

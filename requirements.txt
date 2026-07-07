@@ -1,6 +1,7 @@
 langchain
 langchain-community
 langchain-ollama
+langchain-chroma
 chromadb
 sentence-transformers
 sqlalchemy

@@ -26,7 +26,7 @@ from langchain_ollama import OllamaEmbeddings
 from src.ingestion.chunk_loader import load_documents
 
 # Ruta de persistencia del índice Chroma.
-PERSIST_DIR = Path(__file__).resolve().parents(2) / "data" / "vectorstore" / "chroma"
+PERSIST_DIR = Path(__file__).resolve().parents[2] / "data" / "vectorstore" / "chroma"
 # Nombre de la colección en Chroma.
 COLLECTION_NAME = "marvel_media"
 # Modelo de embeddings a usar.
