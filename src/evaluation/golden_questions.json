@@ -1,0 +1,153 @@
+{
+  "_meta": {
+    "description": "Golden questions para marvel-rag-hybrid. Sirven para (1) diseñar la lógica del router RAG/SQL/híbrido y (2) como base de la Fase de evaluación (RAGAS para 'narrative', exactitud de resultado para 'analytical', ambas para 'hybrid'). Los valores de 'expected_*' están verificados contra data/processed/marvel.db, no son estimaciones.",
+    "categories": {
+      "narrative": "Debe resolverse con el retriever vectorial (rag_documents). No tiene una única 'respuesta correcta' de texto, pero sí un documento fuente esperado: el retrieval se evalúa comprobando que ese (title, year) aparece en el top-k.",
+      "analytical": "Debe resolverse con una tool de sql_tools.py (o, si no encaja, el fallback SQL con guardrails). Tiene una respuesta verificable exacta.",
+      "hybrid": "Requiere primero una consulta analítica para identificar un título concreto, y después una consulta narrativa sobre ese título. El router debe encadenar ambos pasos."
+    },
+    "known_data_caveats": [
+      "mcu_phase agrupa 'Phase 5/6' como un único valor; no existen 'Phase 5' ni 'Phase 6' por separado.",
+      "Varias series (ej. Loki Season 1, What If...?) no tienen fila de rating IMDb, aunque sí de otras fuentes o ninguna.",
+      "budget_usd/revenue_usd solo están disponibles para ~106 de los 161 títulos."
+    ]
+  },
+  "questions": [
+    {
+      "id": "narr-01",
+      "category": "narrative",
+      "question": "¿De qué trata la película original de Captain America de 1944?",
+      "expected_source": {"title": "Captain America", "year": 1944}
+    },
+    {
+      "id": "narr-02",
+      "category": "narrative",
+      "question": "¿Qué ocurre en la primera temporada de Loki?",
+      "expected_source": {"title": "Loki (Season 1)", "year": 2021}
+    },
+    {
+      "id": "narr-03",
+      "category": "narrative",
+      "question": "¿Cuál es la trama de Spider-Man: Across the Spider-Verse?",
+      "expected_source": {"title": "Spider-Man: Across the Spider-Verse", "year": 2023}
+    },
+    {
+      "id": "narr-04",
+      "category": "narrative",
+      "question": "¿De qué va X-Men '97?",
+      "expected_source": {"title": "X-Men '97", "year": 2024}
+    },
+    {
+      "id": "narr-05",
+      "category": "narrative",
+      "question": "¿Qué conflicto enfrenta a los Vengadores en Avengers: Endgame?",
+      "expected_source": {"title": "Avengers: Endgame", "year": 2019}
+    },
+    {
+      "id": "narr-06",
+      "category": "narrative",
+      "question": "¿Qué papel tiene Deadpool en Deadpool & Wolverine?",
+      "expected_source": {"title": "Deadpool & Wolverine", "year": 2024}
+    },
+    {
+      "id": "anl-01",
+      "category": "analytical",
+      "question": "¿Cuál es la película con mayor recaudación de todo el catálogo?",
+      "expected_tool": "top_by_revenue",
+      "expected_answer": "Avengers: Endgame (2019), $2,799,439,100"
+    },
+    {
+      "id": "anl-02",
+      "category": "analytical",
+      "question": "¿Qué título tiene el mejor ROI (recaudación entre presupuesto)?",
+      "expected_tool": "top_by_roi",
+      "expected_answer": "Deadpool (2016, Non-MCU), ROI x13.5"
+    },
+    {
+      "id": "anl-03",
+      "category": "analytical",
+      "question": "¿Qué actor ha aparecido en más títulos del catálogo?",
+      "expected_tool": "actor_appearances",
+      "expected_answer": "Chris Evans, 10 títulos"
+    },
+    {
+      "id": "anl-04",
+      "category": "analytical",
+      "question": "¿En qué películas ha aparecido Robert Downey Jr.?",
+      "expected_tool": "titles_by_actor",
+      "expected_answer": "9 títulos, desde Iron Man (2008) hasta Avengers: Endgame (2019)"
+    },
+    {
+      "id": "anl-05",
+      "category": "analytical",
+      "question": "¿Cuál es el título mejor valorado en IMDb de todo el catálogo?",
+      "expected_tool": "best_rated",
+      "expected_answer": "X-Men '97 (2024), 8.7"
+    },
+    {
+      "id": "anl-06",
+      "category": "analytical",
+      "question": "¿Cuántas series tiene la Fase 4 del UCM?",
+      "expected_tool": "count_titles",
+      "expected_answer": "1 (She-Hulk: Attorney at Law)"
+    },
+    {
+      "id": "anl-07",
+      "category": "analytical",
+      "question": "¿Cuántas películas no pertenecen al UCM (Non-MCU)?",
+      "expected_tool": "count_titles",
+      "expected_answer": "21"
+    },
+    {
+      "id": "anl-08",
+      "category": "analytical",
+      "question": "Dame las 5 películas de Phase 3 mejor valoradas en Rotten Tomatoes",
+      "expected_tool": "best_rated",
+      "expected_answer": "Requiere source='Rotten Tomatoes', mcu_phase='Phase 3' -- pensada para verificar que el LLM pasa bien el parámetro 'source' con dos palabras"
+    },
+    {
+      "id": "anl-09",
+      "category": "analytical",
+      "question": "¿Cuál es el presupuesto medio de las películas de Phase 5/6?",
+      "expected_tool": "run_safe_sql_query (fallback)",
+      "expected_answer": "No cubierta por ninguna función predefinida (agregación AVG) -- pensada a propósito para forzar el camino de fallback y probar los guardrails con una query real",
+      "notes": "Verificar que el router no intenta forzarla en top_by_revenue/top_by_roi y cae correctamente al fallback."
+    },
+    {
+      "id": "hyb-01",
+      "category": "hybrid",
+      "question": "De las películas de Phase 4, la que tuvo mayor presupuesto, ¿de qué trata?",
+      "steps": [
+        {"tool": "run_safe_sql_query o similar (ordenar media por budget_usd DESC, mcu_phase='Phase 4')", "expected_result": "Doctor Strange in the Multiverse of Madness (2022), budget $290,000,000"},
+        {"tool": "vector_retriever", "expected_source": {"title": "Doctor Strange in the Multiverse of Madness", "year": 2022}}
+      ]
+    },
+    {
+      "id": "hyb-02",
+      "category": "hybrid",
+      "question": "¿Quién protagoniza la película con mejor ROI de todo el catálogo y de qué trata?",
+      "steps": [
+        {"tool": "top_by_roi", "expected_result": "Deadpool (2016, Non-MCU), ROI x13.5"},
+        {"tool": "vector_retriever", "expected_source": {"title": "Deadpool", "year": 2016}}
+      ]
+    },
+    {
+      "id": "hyb-03",
+      "category": "hybrid",
+      "question": "El actor con más apariciones en el catálogo, ¿en qué título de 2024 tuvo un cameo?",
+      "steps": [
+        {"tool": "actor_appearances + titles_by_actor", "expected_result": "Chris Evans -> Deadpool & Wolverine (2024)"},
+        {"tool": "vector_retriever", "expected_source": {"title": "Deadpool & Wolverine", "year": 2024}}
+      ]
+    },
+    {
+      "id": "hyb-04",
+      "category": "hybrid",
+      "question": "¿Cuál es el título mejor valorado en IMDb y qué papel juega en él el personaje principal?",
+      "steps": [
+        {"tool": "best_rated", "expected_result": "X-Men '97 (2024), 8.7"},
+        {"tool": "vector_retriever", "expected_source": {"title": "X-Men '97", "year": 2024}}
+      ]
+    }
+  ]
+}
