@@ -20,10 +20,11 @@ No existe 'Phase 5' ni 'Phase 6' por separado.
 from langchain_core.tools import StructuredTool
 from src.retrieval import sql_tools
 from src.retrieval.sql_guardrails import run_safe_query
-# Constantes
+
+# Constantes 
 VALID_PHASES = ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Phase 5/6", "Non-MCU", "Pre-MCU"]
 
-# Descripción del esquema.
+# Descripción del esquema
 SCHEMA_DESCRIPTION = """
 Tablas disponibles (solo lectura):
 - media(media_id, title, year, type[movie|series], mcu_phase, is_mcu_canon, universe,
@@ -35,8 +36,7 @@ Valores válidos de mcu_phase: {phases}. NO existen 'Phase 5' ni 'Phase 6' por s
 están agrupadas como 'Phase 5/6'.
 """.format(phases=", ".join(VALID_PHASES))
 
-
-# Funciones para obtener las tools predefinidas.
+# Funciones
 def get_predefined_tools() -> list[StructuredTool]:
     return [
         StructuredTool.from_function(
@@ -100,7 +100,7 @@ def get_predefined_tools() -> list[StructuredTool]:
     ]
 
 
-# Función para obtener la tool de último recurso.
+# Función de último recurso
 def get_fallback_tool() -> StructuredTool:
     """Tool de último recurso: SQL libre con guardrails. El LLM solo debería
     recurrir a esta si ninguna tool predefinida cubre la pregunta."""
@@ -110,19 +110,25 @@ def get_fallback_tool() -> StructuredTool:
         description=(
             "ÚLTIMO RECURSO. Ejecuta una consulta SQL SELECT de solo lectura sobre las "
             "tablas media, ratings y cast_members cuando ninguna otra tool encaja con la "
-            "pregunta. Usa esta tool solo si top_by_revenue, top_by_roi, actor_appearances, "
-            "titles_by_actor, best_rated o count_titles no pueden responder la pregunta. "
-            "La consulta debe ser un único SELECT; cualquier otra sentencia será rechazada.\n"
-            + SCHEMA_DESCRIPTION
+            "pregunta. Usa esta tool si top_by_revenue, top_by_roi, top_by_budget, "
+            "actor_appearances, titles_by_actor, best_rated o count_titles no pueden "
+            "responder la pregunta -- EN PARTICULAR para cualquier AGREGACIÓN que no sea "
+            "un simple conteo o un top-N: media/promedio (AVG), suma total (SUM), mínimo "
+            "(MIN), o cualquier pregunta con las palabras 'media', 'promedio', 'total', "
+            "'suma'. Estas agregaciones NO están cubiertas por ninguna tool predefinida, "
+            "así que si la pregunta las pide, usa ESTA tool directamente sin probar antes "
+            "top_by_revenue/top_by_budget/top_by_roi (esas solo devuelven un ranking, "
+            "nunca un promedio). La consulta debe ser un único SELECT; cualquier otra "
+            "sentencia será rechazada.\n" + SCHEMA_DESCRIPTION
         ),
     )
 
-
-# Función para obtener todas las tools.
+# Función principal
 def get_all_tools() -> list[StructuredTool]:
     return get_predefined_tools() + [get_fallback_tool()]
 
 
+# Punto de entrada
 if __name__ == "__main__":
     tools = get_all_tools()
     print(f"{len(tools)} tools disponibles para el agente analítico:\n")

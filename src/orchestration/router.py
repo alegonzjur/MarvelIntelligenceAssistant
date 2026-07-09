@@ -17,26 +17,26 @@ No probado en este entorno por no disponer de Ollama; probar en local con:
 
     python -m src.orchestration.router
 """
-# Importación de librerías
+# Importación de librerías.
 from enum import Enum
 from typing import Any
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 from src.retrieval.sql_agent import get_all_tools
 from src.retrieval.vector_retriever import MarvelRetriever
 
-# Configuración del modelo
+# Configuración del modelo de router.
 ROUTER_MODEL = "llama3.2:3b"  # debe soportar tool calling / structured output
 
-# Definición de categorías
+
+# Definición de categorías de ruta.
 class RouteCategory(str, Enum):
     NARRATIVE = "narrative"
     ANALYTICAL = "analytical"
     HYBRID = "hybrid"
 
-
-# Definición del modelo de decisión
+# Definición del modelo de decisión.
 class RouteDecision(BaseModel):
     category: RouteCategory = Field(
         description="Tipo de pregunta: 'narrative' (trama, personajes, argumento), "
@@ -47,6 +47,7 @@ class RouteDecision(BaseModel):
     reasoning: str = Field(description="Justificación breve de la clasificación, en una frase.")
 
 
+# Definición del prompt del clasificador.
 CLASSIFIER_SYSTEM_PROMPT = """Eres un router que clasifica preguntas sobre un catálogo \
 de películas y series de Marvel/MCU en tres categorías:
 
@@ -62,14 +63,19 @@ de películas y series de Marvel/MCU en tres categorías:
 Señal clave para distinguir 'analytical' de 'hybrid': si la pregunta pide una CIFRA \
 o LISTA como respuesta final, es analytical. Si pide TRAMA/CONTENIDO de un título que \
 hay que identificar primero por un criterio numérico, es hybrid.
+
+Atención: preguntas del tipo "¿en qué películas ha aparecido [actor]?" son ANALYTICAL \
+(piden una lista de títulos filtrada por un dato del catálogo, no la trama de ninguno \
+de ellos), aunque mencionen "películas" y no una cifra explícita. NO las confundas con \
+narrative solo porque no piden un número.
 """
 
-# Función para obtener el LLM
+# Función para obtener el LLM.
 def _get_llm(temperature: float = 0.0) -> ChatOllama:
     return ChatOllama(model=ROUTER_MODEL, temperature=temperature)
 
 
-# Función para clasificar la pregunta
+# Función para clasificar la pregunta.
 def classify(question: str, llm: ChatOllama | None = None) -> RouteDecision:
     llm = llm or _get_llm()
     structured_llm = llm.with_structured_output(RouteDecision)
@@ -80,39 +86,67 @@ def classify(question: str, llm: ChatOllama | None = None) -> RouteDecision:
     )
 
 
-# Función para ejecutar el paso de llamada a herramientas
-def _run_tool_calling_step(question: str, llm: ChatOllama) -> list[dict[str, Any]]:
+# Función para ejecutar el paso de llamada a tools.
+def _run_tool_calling_step(
+    question: str, llm: ChatOllama, max_iterations: int = 3
+) -> list[dict[str, Any]]:
     """Deja que el LLM elija y ejecute una o varias tools SQL para responder
-    la parte analítica de la pregunta. Devuelve los resultados crudos de
-    cada tool invocada (no la redacción del LLM)."""
+    la parte analítica de la pregunta, permitiendo ENCADENAR tools cuando
+    una sola no basta (ej. "el actor con más apariciones, ¿en qué título de
+    2024 tuvo un cameo?" necesita primero actor_appearances y después
+    titles_by_actor con el nombre que devolvió la primera). Se hace un
+    bucle de hasta `max_iterations` rondas, alimentando de vuelta al LLM
+    los resultados de cada tool como mensajes de tipo tool, hasta que deje
+    de pedir más tools o se alcance el límite."""
     tools = get_all_tools()
     tools_by_name = {t.name: t for t in tools}
-
     llm_with_tools = llm.bind_tools(tools)
-    response = llm_with_tools.invoke(
-        f"Responde a esta pregunta analítica usando las tools disponibles. "
-        f"Pregunta: {question}"
-    )
 
-    results = []
-    for call in response.tool_calls:
-        tool = tools_by_name.get(call["name"])
-        if tool is None:
-            results.append({"tool": call["name"], "error": "tool desconocida"})
-            continue
-        output = tool.invoke(call["args"])
-        results.append({"tool": call["name"], "args": call["args"], "output": output})
+    messages: list = [
+        HumanMessage(
+            content=(
+                "Responde a esta pregunta analítica usando las tools disponibles. "
+                "Si necesitas el resultado de una tool para poder llamar a otra "
+                "(por ejemplo, primero identificar un nombre y luego buscar sus "
+                "títulos), hazlo en pasos sucesivos: no asumas ni inventes el "
+                "argumento de la segunda tool, espera al resultado real de la "
+                f"primera.\n\nPregunta: {question}"
+            )
+        )
+    ]
 
-    if not results:
-        # El LLM no llamó a ninguna tool -- se propaga tal cual para que
-        # chain.py pueda decidir cómo manejar el caso (reintento, mensaje
-        # de "no se pudo responder", etc.)
-        results.append({"tool": None, "output": response.content})
+    all_results: list[dict[str, Any]] = []
+    last_response = None
 
-    return results
+    for _ in range(max_iterations):
+        response = llm_with_tools.invoke(messages)
+        last_response = response
+        if not response.tool_calls:
+            break
+
+        messages.append(response)
+        for call in response.tool_calls:
+            tool = tools_by_name.get(call["name"])
+            if tool is None:
+                output = f"Error: tool desconocida '{call['name']}'"
+            else:
+                output = tool.invoke(call["args"])
+
+            all_results.append({"tool": call["name"], "args": call["args"], "output": output})
+            messages.append(
+                ToolMessage(content=str(output), tool_call_id=call["id"])
+            )
+
+    if not all_results:
+        # El LLM no llamó a ninguna tool en ninguna ronda -- se propaga tal
+        # cual para que chain.py pueda decidir cómo manejar el caso.
+        content = last_response.content if last_response else ""
+        all_results.append({"tool": None, "output": content})
+
+    return all_results
 
 
-# Función para responder preguntas narrativas
+# Función para ejecutar el paso de búsqueda narrativa.
 def answer_narrative(question: str, retriever: MarvelRetriever, k: int = 4) -> dict[str, Any]:
     docs = retriever.search(question, k=k)
     return {
@@ -122,7 +156,7 @@ def answer_narrative(question: str, retriever: MarvelRetriever, k: int = 4) -> d
     }
 
 
-# Función para responder preguntas analíticas
+# Función para ejecutar el paso de análisis.
 def answer_analytical(question: str, llm: ChatOllama) -> dict[str, Any]:
     tool_results = _run_tool_calling_step(question, llm)
     return {
@@ -131,7 +165,7 @@ def answer_analytical(question: str, llm: ChatOllama) -> dict[str, Any]:
     }
 
 
-# Función para responder preguntas híbridas
+# Función para ejecutar el paso de búsqueda híbrida.
 def answer_hybrid(question: str, llm: ChatOllama, retriever: MarvelRetriever) -> dict[str, Any]:
     # Paso 1: resolver la parte analítica para identificar el/los título(s) objetivo.
     analytical_step = _run_tool_calling_step(question, llm)
@@ -178,7 +212,7 @@ def answer_hybrid(question: str, llm: ChatOllama, retriever: MarvelRetriever) ->
     }
 
 
-# Función para enrutar la pregunta
+# Función para ejecutar el paso de enrutamiento.
 def route(question: str) -> dict[str, Any]:
     """Punto de entrada único: clasifica y recupera el contexto adecuado."""
     llm = _get_llm()
@@ -196,8 +230,7 @@ def route(question: str) -> dict[str, Any]:
     return result
 
 
-
-# Función para probar el router
+# Función para ejecutar el paso de prueba.
 if __name__ == "__main__":
     import json
 
