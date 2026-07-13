@@ -49,8 +49,8 @@ Chroma    SQL tools    SQL tools → extracción de título → Chroma
 | Vector store | ChromaDB, persistente, con filtrado por metadata |
 | Orquestación | LangChain (tool calling + structured output) |
 | Capa tabular | SQLite |
-| API (pendiente) | FastAPI |
-| Frontend (pendiente) | Streamlit |
+| API | FastAPI |
+| Frontend | Streamlit |
 | Tracking (pendiente) | MLflow |
 | Tests (pendiente) | pytest |
 | Contenedores (pendiente) | Docker |
@@ -77,9 +77,15 @@ marvel-rag-hybrid/
 │   │   ├── sql_guardrails.py     # validación de SQL libre (camino de escape)
 │   │   └── sql_agent.py          # expone ambos caminos como tools de LangChain
 │   ├── orchestration/
-│   │   └── router.py             # clasifica + recupera contexto (narrative/analytical/hybrid)
+│   │   ├── router.py             # clasifica + recupera contexto (narrative/analytical/hybrid)
+│   │   └── chain.py              # sintetiza la respuesta final en lenguaje natural
+│   ├── api/
+│   │   ├── schemas.py            # contratos Pydantic de request/response
+│   │   └── main.py               # API FastAPI (/ask, /health, /info)
 │   └── evaluation/
 │       └── golden_questions.json # 19 preguntas de referencia, verificadas contra marvel.db
+├── frontend/
+│   └── app.py                    # frontend Streamlit tipo chat, consume la API vía HTTP
 ├── notebooks/
 │   └── 01_eda_exploracion.ipynb
 └── requirements.txt
@@ -134,9 +140,17 @@ Probado con 5 casos (2 maliciosos, 3 válidos) — ver bloque `if __name__ == "_
 
 ---
 
+## API y Frontend
+
+**API (`src/api/`)**: envuelve `chain.answer()` en un endpoint `POST /ask`, más `GET /health` (comprueba que existen el índice Chroma y `marvel.db` en disco, sin verificar Ollama) y `GET /info` (expone qué modelos está usando la API, útil para depurar sin mirar el código). Decisiones a destacar:
+- Endpoints declarados con `def`, no `async def`: `chain.answer()` hace llamadas bloqueantes a Ollama, así que `async def` sin cliente async bloquearía el event loop entero. Con `def` normal, FastAPI ejecuta el handler en un threadpool automáticamente.
+- Los errores nunca filtran detalles internos al cliente: cualquier excepción se traduce a un `500` genérico; el traceback completo va a logs del servidor, no a la respuesta HTTP.
+
+**Frontend (`frontend/app.py`)**: interfaz Streamlit tipo chat que consume la API **vía HTTP**, deliberadamente sin importar `chain.py` directamente — mantiene frontend y backend desacoplados (la API se puede probar por separado con Swagger en `/docs`, y el frontend podría correr en otra máquina sin cambios). Incluye botones de preguntas de ejemplo sacados directamente de `golden_questions.json`, y un desplegable por respuesta que muestra qué documentos/tools sustentan cada respuesta (la misma transparencia de `raw_context` que se usaba para depurar en consola, ahora visible en la interfaz).
+
 ## Router: clasificación + recuperación de contexto
 
-`router.py` separa deliberadamente **clasificación y recuperación de contexto** de la **generación de la respuesta final** (que irá en `chain.py`, aún no construido). Esto permite evaluar la calidad del *routing* (¿recuperó el contexto correcto?) independientemente de la calidad de *redacción* del LLM — son dos fuentes de error distintas.
+`router.py` separa deliberadamente **clasificación y recuperación de contexto** de la **generación de la respuesta final** (responsabilidad de `chain.py`). Esto permite evaluar la calidad del *routing* (¿recuperó el contexto correcto?) independientemente de la calidad de *redacción* del LLM — son dos fuentes de error distintas.
 
 - **`classify()`**: clasifica la pregunta en `narrative` / `analytical` / `hybrid` mediante `with_structured_output` (salida forzada a un modelo Pydantic, no parseo de texto libre).
 - **`answer_narrative()`**: búsqueda semántica directa vía `MarvelRetriever`.
@@ -168,7 +182,7 @@ Incluye casos pensados a propósito para estresar el diseño:
 | Fase 3 — Router (`router.py`) | ✅ Hecho y probado en local (3/3 casos correctos con `llama3.2:3b`) |
 | Fase 3 — `chain.py` (síntesis de respuesta final) | ✅ Hecho y probado |
 | Fase 4 — Evaluación sistemática (`run_eval.py` sobre las 19 golden questions) | ✅ Hecho — 19/19 routing, 100% retrieval narrativo, 100% tool match analítico, 100% retrieval híbrido (tras 3 rondas de fixes, ver más abajo) |
-| Fase 5 — API (FastAPI) + Frontend (Streamlit) | ⬜ Pendiente |
+| Fase 5 — API (FastAPI, `src/api/`) + Frontend (Streamlit, `frontend/app.py`) | ✅ Hecho y probado end-to-end (API + frontend + Ollama real) |
 | Fase 6 — MLOps ligero (MLflow, pytest, DVC opcional) | ⬜ Pendiente |
 
 ---
@@ -219,12 +233,22 @@ python -m src.retrieval.sql_agent
 
 # Fase 3: probar el router (requiere `ollama pull llama3.1` o `llama3.2:3b`)
 python -m src.orchestration.router
+python -m src.orchestration.chain
+
+# Fase 4: evaluación sistemática sobre las 19 golden questions
+python -m src.evaluation.run_eval
+
+# Fase 5: API + frontend (en dos terminales separadas)
+uvicorn src.api.main:app --reload --port 8000    # docs interactivas en /docs
+streamlit run frontend/app.py
 ```
 
 ---
 
 ## Próximos pasos
 
-1. API FastAPI + frontend Streamlit
-2. MLflow para trackear variantes de prompt/chunking/modelo; pytest para router, tools y retriever
-3. (Opcional) reproducir la evaluación con `llama3.1` en un equipo con más recursos, para comparar fiabilidad de tool calling frente a `llama3.2:3b`
+1. MLflow para trackear variantes de prompt/chunking/modelo
+2. pytest para router, tools, retriever y API (tests unitarios + de integración con mocks, en la línea de las pruebas manuales ya hechas durante el desarrollo)
+3. (Opcional) DVC para versionar el índice Chroma y `marvel.db` si se itera mucho sobre chunking/embeddings
+4. (Opcional) reproducir la evaluación con `llama3.1` en un equipo con más recursos, para comparar fiabilidad de tool calling frente a `llama3.2:3b`
+5. (Opcional) Dockerizar API + frontend
