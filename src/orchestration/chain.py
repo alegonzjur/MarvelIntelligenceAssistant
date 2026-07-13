@@ -138,6 +138,16 @@ def _synthesize_analytical(question: str, context: dict[str, Any], llm: ChatOlla
 
 # Función para sintetizar respuestas híbridas.
 def _synthesize_hybrid(question: str, context: dict[str, Any], llm: ChatOllama) -> str:
+    if context.get("analytical_failed"):
+        # No se pudo resolver la parte analítica (ninguna tool se ejecutó con
+        # éxito) -- se devuelve un mensaje honesto en vez de dejar que el LLM
+        # improvise una respuesta sin datos reales de por medio.
+        return (
+            "No he podido resolver la parte analítica de esta pregunta con las "
+            "herramientas disponibles, así que no puedo identificar con certeza "
+            "el título sobre el que responder. ¿Puedes reformular la pregunta o "
+            "ser más específico?"
+        )
     analytical_formatted = _format_tool_results(context["analytical_step"])
     narrative_formatted = _format_documents(context["documents"])
     chain = HYBRID_PROMPT | llm | StrOutputParser()

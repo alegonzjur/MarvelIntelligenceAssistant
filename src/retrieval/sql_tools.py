@@ -22,6 +22,20 @@ import sqlite3
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "processed" / "marvel.db"
 
 # Función para crear conexión de solo lectura
+def _clean(value: str | None) -> str | None:
+    """Normaliza valores 'None'/'null'/'' que a veces llegan como STRING
+    LITERAL desde el tool calling de modelos pequeños (ej. llama3.2:3b),
+    en vez de un JSON null real. Sin esto, `if mcu_phase:` trata el string
+    "None" como verdadero y genera un WHERE que no coincide con nada,
+    fallando en silencio (bug real detectado en producción: ver hyb-02
+    en el reporte de evaluación)."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in {"none", "null", ""}:
+        return None
+    return value
+
+
 def _read_only_connection(
     db_path: Path = DB_PATH
 ) -> sqlite3.Connection:
@@ -33,6 +47,7 @@ def _read_only_connection(
 # Función para obtener los top N títulos por recaudación
 def top_by_revenue(mcu_phase: str | None = None, n: int = 5) -> str:
     """Top N títulos por recaudación (revenue_usd), opcionalmente filtrado por fase."""
+    mcu_phase = _clean(mcu_phase)
     # Construir cláusula WHERE y parámetros
     where = "WHERE revenue_usd IS NOT NULL"
     params: list = []
@@ -60,6 +75,7 @@ def top_by_revenue(mcu_phase: str | None = None, n: int = 5) -> str:
 # Función para obtener los top N títulos por presupuesto
 def top_by_budget(mcu_phase: str | None = None, n: int = 5) -> str:
     """Top N títulos por presupuesto (budget_usd), opcionalmente filtrado por fase."""
+    mcu_phase = _clean(mcu_phase)
     where = "WHERE budget_usd IS NOT NULL"
     params: list = []
     if mcu_phase:
@@ -87,6 +103,7 @@ def top_by_budget(mcu_phase: str | None = None, n: int = 5) -> str:
 # Función para obtener los top N títulos por ROI
 def top_by_roi(mcu_phase: str | None = None, n: int = 5) -> str:
     """Top N títulos por ROI (revenue/budget), opcionalmente filtrado por fase."""
+    mcu_phase = _clean(mcu_phase)
     # Construir cláusula WHERE y parámetros
     where = "WHERE revenue_usd IS NOT NULL AND budget_usd IS NOT NULL AND budget_usd > 0"
     params: list = []
@@ -166,6 +183,7 @@ def best_rated(source: str = "IMDb", mcu_phase: str | None = None, n: int = 5) -
     (valores válidos en origen: IMDb, TMDB, Rotten Tomatoes, Metacritic;
     la comparación es insensible a mayúsculas), opcionalmente por fase."""
     
+    mcu_phase = _clean(mcu_phase)
     # Construir cláusula WHERE y parámetros
     where = "WHERE r.source = ? COLLATE NOCASE"
     params: list = [source]
@@ -196,6 +214,8 @@ def best_rated(source: str = "IMDb", mcu_phase: str | None = None, n: int = 5) -
  
 def count_titles(mcu_phase: str | None = None, media_type: str | None = None) -> str:
     """Cuenta títulos, opcionalmente filtrado por fase y/o tipo (movie/series)."""
+    mcu_phase = _clean(mcu_phase)
+    media_type = _clean(media_type)
     # Construir cláusula WHERE y parámetros
     where = "WHERE 1=1"
     params: list = []

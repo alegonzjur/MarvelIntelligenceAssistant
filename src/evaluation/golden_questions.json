@@ -132,13 +132,12 @@
       ]
     },
     {
-      "id": "hyb-03",
-      "category": "hybrid",
+      "id": "anl-10",
+      "category": "analytical",
       "question": "El actor con más apariciones en el catálogo, ¿en qué título de 2024 tuvo un cameo?",
-      "steps": [
-        {"tool": "actor_appearances + titles_by_actor", "expected_result": "Chris Evans -> Deadpool & Wolverine (2024)"},
-        {"tool": "vector_retriever", "expected_source": {"title": "Deadpool & Wolverine", "year": 2024}}
-      ]
+      "expected_tool": "actor_appearances + titles_by_actor (encadenadas)",
+      "expected_answer": "Chris Evans -> Deadpool & Wolverine (2024)",
+      "notes": "Recategorizada de 'hybrid' a 'analytical': solo pide identificar un título mediante datos del catálogo (encadenando dos tools), no pide trama ni contenido narrativo de él, así que no requiere el paso de retrieval que define a las preguntas 'hybrid'."
     },
     {
       "id": "hyb-04",

@@ -17,26 +17,26 @@ No probado en este entorno por no disponer de Ollama; probar en local con:
 
     python -m src.orchestration.router
 """
-# Importación de librerías.
+
 from enum import Enum
 from typing import Any
+
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
+
 from src.retrieval.sql_agent import get_all_tools
 from src.retrieval.vector_retriever import MarvelRetriever
 
-# Configuración del modelo de router.
 ROUTER_MODEL = "llama3.2:3b"  # debe soportar tool calling / structured output
 
 
-# Definición de categorías de ruta.
 class RouteCategory(str, Enum):
     NARRATIVE = "narrative"
     ANALYTICAL = "analytical"
     HYBRID = "hybrid"
 
-# Definición del modelo de decisión.
+
 class RouteDecision(BaseModel):
     category: RouteCategory = Field(
         description="Tipo de pregunta: 'narrative' (trama, personajes, argumento), "
@@ -47,7 +47,6 @@ class RouteDecision(BaseModel):
     reasoning: str = Field(description="Justificación breve de la clasificación, en una frase.")
 
 
-# Definición del prompt del clasificador.
 CLASSIFIER_SYSTEM_PROMPT = """Eres un router que clasifica preguntas sobre un catálogo \
 de películas y series de Marvel/MCU en tres categorías:
 
@@ -70,12 +69,11 @@ de ellos), aunque mencionen "películas" y no una cifra explícita. NO las confu
 narrative solo porque no piden un número.
 """
 
-# Función para obtener el LLM.
+
 def _get_llm(temperature: float = 0.0) -> ChatOllama:
     return ChatOllama(model=ROUTER_MODEL, temperature=temperature)
 
 
-# Función para clasificar la pregunta.
 def classify(question: str, llm: ChatOllama | None = None) -> RouteDecision:
     llm = llm or _get_llm()
     structured_llm = llm.with_structured_output(RouteDecision)
@@ -86,7 +84,6 @@ def classify(question: str, llm: ChatOllama | None = None) -> RouteDecision:
     )
 
 
-# Función para ejecutar el paso de llamada a tools.
 def _run_tool_calling_step(
     question: str, llm: ChatOllama, max_iterations: int = 3
 ) -> list[dict[str, Any]]:
@@ -146,7 +143,6 @@ def _run_tool_calling_step(
     return all_results
 
 
-# Función para ejecutar el paso de búsqueda narrativa.
 def answer_narrative(question: str, retriever: MarvelRetriever, k: int = 4) -> dict[str, Any]:
     docs = retriever.search(question, k=k)
     return {
@@ -156,7 +152,6 @@ def answer_narrative(question: str, retriever: MarvelRetriever, k: int = 4) -> d
     }
 
 
-# Función para ejecutar el paso de análisis.
 def answer_analytical(question: str, llm: ChatOllama) -> dict[str, Any]:
     tool_results = _run_tool_calling_step(question, llm)
     return {
@@ -165,28 +160,65 @@ def answer_analytical(question: str, llm: ChatOllama) -> dict[str, Any]:
     }
 
 
-# Función para ejecutar el paso de búsqueda híbrida.
 def answer_hybrid(question: str, llm: ChatOllama, retriever: MarvelRetriever) -> dict[str, Any]:
     # Paso 1: resolver la parte analítica para identificar el/los título(s) objetivo.
     analytical_step = _run_tool_calling_step(question, llm)
+
+    # Guardrail anti-alucinación: si ninguna tool se ejecutó de verdad (el LLM
+    # no logró formatear la llamada, o directamente no llamó a ninguna), NO
+    # tiene sentido pedirle al siguiente LLM que "extraiga un título" de ese
+    # resultado -- en la práctica, cuando se ha intentado, el modelo termina
+    # inventando un título plausible con su conocimiento general (ej. "El
+    # Padrino") en vez de admitir que no hay dato. Se corta aquí y se
+    # devuelve un estado explícito de fallo, que chain.py debe redactar
+    # como "no se pudo responder", no como una respuesta inventada.
+    tool_actually_used = any(r.get("tool") is not None for r in analytical_step)
+    if not tool_actually_used:
+        return {
+            "category": RouteCategory.HYBRID,
+            "analytical_step": analytical_step,
+            "identified_target": None,
+            "documents": [],
+            "sources": [],
+            "analytical_failed": True,
+        }
 
     # Paso 2: extraer el título/año concreto del resultado de la tool, para
     # usarlo como query de recuperación narrativa. Se usa un LLM call corto
     # y estructurado en vez de regex, porque el formato de salida de las
     # tools varía (top-N con ranking, valor único, etc.).
     class ExtractedTarget(BaseModel):
-        title: str = Field(description="Título exacto de la obra identificada, sin año.")
-        year: int | None = Field(default=None, description="Año de la obra si se conoce.")
+        title: str = Field(
+            description="Título exacto de la obra identificada, copiado literalmente del "
+            "resultado analítico (sin traducir, sin corregir, sin usar conocimiento externo). "
+            "Si el resultado analítico no contiene ningún título identificable (ej. mensaje "
+            "de error, texto vacío, o no relacionado con títulos), escribe exactamente "
+            "'UNKNOWN' -- NUNCA inventes ni sugieras un título que no aparezca literalmente "
+            "en el resultado."
+        )
+        year: int | None = Field(default=None, description="Año de la obra si se conoce, tal como aparece en el resultado.")
 
     tool_output_text = "\n".join(str(r.get("output", "")) for r in analytical_step)
     extractor = llm.with_structured_output(ExtractedTarget)
     target = extractor.invoke(
-        f"A partir de este resultado analítico, extrae el título concreto sobre el que "
-        f"habrá que buscar información narrativa después. Si hay varios, elige el primero "
-        f"(el más relevante para la pregunta original).\n\n"
+        f"A partir de este resultado analítico, extrae el título EXACTO (copiado "
+        f"literalmente, sin traducir ni usar conocimiento propio) sobre el que habrá que "
+        f"buscar información narrativa después. Si hay varios, elige el primero (el más "
+        f"relevante para la pregunta original). Si el resultado no contiene ningún título "
+        f"reconocible, responde 'UNKNOWN'.\n\n"
         f"Pregunta original: {question}\n\n"
         f"Resultado analítico:\n{tool_output_text}"
     )
+
+    if target.title.strip().upper() == "UNKNOWN":
+        return {
+            "category": RouteCategory.HYBRID,
+            "analytical_step": analytical_step,
+            "identified_target": None,
+            "documents": [],
+            "sources": [],
+            "analytical_failed": True,
+        }
 
     # Paso 3: recuperación narrativa filtrada por el título exacto identificado,
     # en vez de una búsqueda semántica libre -- ya sabemos qué documento
@@ -212,7 +244,6 @@ def answer_hybrid(question: str, llm: ChatOllama, retriever: MarvelRetriever) ->
     }
 
 
-# Función para ejecutar el paso de enrutamiento.
 def route(question: str) -> dict[str, Any]:
     """Punto de entrada único: clasifica y recupera el contexto adecuado."""
     llm = _get_llm()
@@ -230,7 +261,6 @@ def route(question: str) -> dict[str, Any]:
     return result
 
 
-# Función para ejecutar el paso de prueba.
 if __name__ == "__main__":
     import json
 
