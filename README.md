@@ -4,7 +4,7 @@ Asistente conversacional híbrido **RAG + SQL agent** sobre el catálogo MCU/Mar
 
 Dataset base: [MCU and Marvel Media Complete Dataset](https://www.kaggle.com/datasets/vanshkumar007/mcu-and-marvel-media-complete-dataset) (Kaggle).
 
-> **Estado del proyecto:** en desarrollo activo. Este README se actualiza a medida que avanzan las fases. La sección [Estado actual](#estado-actual-de-las-fases) indica qué está hecho, probado, y qué queda pendiente.
+> **Estado del proyecto:** las 6 fases planeadas están completas (ingesta → RAG → SQL agent → orquestación → evaluación → API/frontend/tests). Lo que queda es opcional (ver [Próximos pasos](#próximos-pasos)). La sección [Estado actual](#estado-actual-de-las-fases) detalla qué está hecho y probado.
 
 ---
 
@@ -51,8 +51,8 @@ Chroma    SQL tools    SQL tools → extracción de título → Chroma
 | Capa tabular | SQLite |
 | API | FastAPI |
 | Frontend | Streamlit |
-| Tracking (pendiente) | MLflow |
-| Tests (pendiente) | pytest |
+| Tracking | MLflow (backend SQLite) |
+| Tests | pytest |
 | Contenedores (pendiente) | Docker |
 
 ---
@@ -83,9 +83,20 @@ marvel-rag-hybrid/
 │   │   ├── schemas.py            # contratos Pydantic de request/response
 │   │   └── main.py               # API FastAPI (/ask, /health, /info)
 │   └── evaluation/
-│       └── golden_questions.json # 19 preguntas de referencia, verificadas contra marvel.db
+│       ├── golden_questions.json # 19 preguntas de referencia, verificadas contra marvel.db
+│       ├── run_eval.py           # evaluador ligero: routing accuracy, retrieval hit-rate, tool match
+│       └── track_eval.py         # envuelve run_eval.py con tracking en MLflow
 ├── frontend/
 │   └── app.py                    # frontend Streamlit tipo chat, consume la API vía HTTP
+├── tests/
+│   ├── conftest.py                # fixtures compartidas; salta tests si faltan marvel.db/índice
+│   ├── test_sql_tools.py          # incluye test de regresión del bug "None" como string
+│   ├── test_sql_guardrails.py     # los 5 casos (2 maliciosos, 3 válidos) formalizados
+│   ├── test_vector_retriever.py   # lógica de filtros, sin depender de Ollama/Chroma
+│   ├── test_api.py                # capa HTTP con chain.answer() mockeado
+│   └── test_golden_questions.py   # validación estructural del propio golden_questions.json
+├── mlflow/
+│   └── mlflow.db                  # backend SQLite de MLflow (generado, no versionado en git)
 ├── notebooks/
 │   └── 01_eda_exploracion.ipynb
 └── requirements.txt
@@ -148,6 +159,14 @@ Probado con 5 casos (2 maliciosos, 3 válidos) — ver bloque `if __name__ == "_
 
 **Frontend (`frontend/app.py`)**: interfaz Streamlit tipo chat que consume la API **vía HTTP**, deliberadamente sin importar `chain.py` directamente — mantiene frontend y backend desacoplados (la API se puede probar por separado con Swagger en `/docs`, y el frontend podría correr en otra máquina sin cambios). Incluye botones de preguntas de ejemplo sacados directamente de `golden_questions.json`, y un desplegable por respuesta que muestra qué documentos/tools sustentan cada respuesta (la misma transparencia de `raw_context` que se usaba para depurar en consola, ahora visible en la interfaz).
 
+## Testing y MLOps ligero
+
+**Tests (`tests/`, 39 tests, pytest)**: formalizan las pruebas manuales hechas por consola durante todo el desarrollo — funciones SQL contra `marvel.db` real, guardrails (casos maliciosos y válidos), lógica de filtros del retriever (sin depender de Ollama/Chroma), capa HTTP de la API (con `chain.answer()` mockeado), y validación estructural de `golden_questions.json`. Los tests que requieren `marvel.db` o el índice Chroma se **saltan automáticamente** (no fallan) si esos artefactos no existen en el entorno, vía `pytest.mark.skipif` en `conftest.py` — visible en el resumen de pytest en vez de dar una falsa sensación de "todo verde".
+
+Incluye un **test de regresión explícito** (`test_regression_string_none_is_treated_as_no_filter`) que fija en piedra el bug real detectado en la Fase 4 (`mcu_phase="None"` como string literal desde tool calling) — si algún cambio futuro en `sql_tools.py` lo reintrodujera, pytest lo detectaría al instante en vez de tener que volver a diagnosticarlo a mano.
+
+**MLflow (`src/evaluation/track_eval.py`)**: envuelve `run_eval.py` con tracking de métricas (routing accuracy, retrieval hit-rate por categoría, tool match) más parámetros (modelo de router/síntesis, commit de git) en cada ejecución, usando backend SQLite local (`mlflow/mlflow.db`) — el backend de ficheros clásico de MLflow está en modo mantenimiento en versiones recientes y ya no se admite sin una variable de entorno especial. Permite comparar iteraciones (ej. `llama3.2:3b` vs `llama3.1`) sin perder el historial de resultados.
+
 ## Router: clasificación + recuperación de contexto
 
 `router.py` separa deliberadamente **clasificación y recuperación de contexto** de la **generación de la respuesta final** (responsabilidad de `chain.py`). Esto permite evaluar la calidad del *routing* (¿recuperó el contexto correcto?) independientemente de la calidad de *redacción* del LLM — son dos fuentes de error distintas.
@@ -183,7 +202,7 @@ Incluye casos pensados a propósito para estresar el diseño:
 | Fase 3 — `chain.py` (síntesis de respuesta final) | ✅ Hecho y probado |
 | Fase 4 — Evaluación sistemática (`run_eval.py` sobre las 19 golden questions) | ✅ Hecho — 19/19 routing, 100% retrieval narrativo, 100% tool match analítico, 100% retrieval híbrido (tras 3 rondas de fixes, ver más abajo) |
 | Fase 5 — API (FastAPI, `src/api/`) + Frontend (Streamlit, `frontend/app.py`) | ✅ Hecho y probado end-to-end (API + frontend + Ollama real) |
-| Fase 6 — MLOps ligero (MLflow, pytest, DVC opcional) | ⬜ Pendiente |
+| Fase 6 — MLOps ligero (`tests/` con pytest, `track_eval.py` con MLflow) | ✅ Hecho — 39/39 tests pasando |
 
 ---
 
@@ -241,14 +260,20 @@ python -m src.evaluation.run_eval
 # Fase 5: API + frontend (en dos terminales separadas)
 uvicorn src.api.main:app --reload --port 8000    # docs interactivas en /docs
 streamlit run frontend/app.py
+
+# Fase 6: tests (rápidos, no requieren Ollama) y tracking de evaluación (requiere Ollama)
+python -m pytest -v
+python -m src.evaluation.track_eval --run-name "mi-iteracion"
+mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db
 ```
 
 ---
 
 ## Próximos pasos
 
-1. MLflow para trackear variantes de prompt/chunking/modelo
-2. pytest para router, tools, retriever y API (tests unitarios + de integración con mocks, en la línea de las pruebas manuales ya hechas durante el desarrollo)
-3. (Opcional) DVC para versionar el índice Chroma y `marvel.db` si se itera mucho sobre chunking/embeddings
-4. (Opcional) reproducir la evaluación con `llama3.1` en un equipo con más recursos, para comparar fiabilidad de tool calling frente a `llama3.2:3b`
-5. (Opcional) Dockerizar API + frontend
+Las 6 fases planeadas están completas. Lo que queda es opcional:
+
+1. Reproducir la evaluación con `llama3.1` en un equipo con más recursos (`python -m src.evaluation.track_eval --run-name "llama3.1-comparison"`) y comparar en MLflow contra el baseline de `llama3.2:3b`
+2. DVC para versionar el índice Chroma y `marvel.db` si se itera mucho sobre chunking/embeddings
+3. Dockerizar API + frontend para facilitar el despliegue
+4. Ampliar `tests/` con tests de integración reales (requieren Ollama) además de los actuales, que usan mocks deliberadamente para poder correr en cualquier entorno
