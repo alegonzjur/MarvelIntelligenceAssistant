@@ -1,0 +1,46 @@
+# docker-compose.yml
+#
+# Levanta API + frontend en contenedores. Ollama NO está aquí: se asume
+# que corre en la máquina host (como durante todo el desarrollo), y los
+# contenedores le hablan a través de `host.docker.internal`, que Docker
+# resuelve a la IP del host.
+#
+# En Linux, `host.docker.internal` no se resuelve por defecto (a
+# diferencia de Docker Desktop en Mac/Windows) -- por eso el
+# `extra_hosts` de abajo, que lo mapea explícitamente al gateway del host
+# (funciona en Docker Engine 20.10+).
+#
+# Uso:
+#   docker compose up --build
+#   API:      http://localhost:8000/docs
+#   Frontend: http://localhost:8501
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - ROUTER_MODEL=${ROUTER_MODEL:-llama3.1}
+      - SYNTHESIS_MODEL=${SYNTHESIS_MODEL:-llama3.2:3b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./mlflow:/app/mlflow
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - MARVEL_API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped

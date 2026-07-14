@@ -1,0 +1,23 @@
+# docker/Dockerfile.api
+#
+# Imagen de la API FastAPI. NO incluye Ollama -- Ollama corre en la
+# máquina host (o en su propio contenedor si se prefiere) y este
+# contenedor le habla vía OLLAMA_BASE_URL (ver docker-compose.yml).
+#
+# data/ y mlflow/ se montan como volúmenes en docker-compose.yml, no se
+# copian a la imagen: son datos generados (marvel.db, índice Chroma) que
+# no tiene sentido "hornear" dentro de la imagen y que además pueden
+# pesar varios cientos de MB.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

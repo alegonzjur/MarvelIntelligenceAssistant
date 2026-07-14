@@ -1,0 +1,20 @@
+# docker/Dockerfile.frontend
+#
+# Imagen del frontend Streamlit. Solo necesita requests + streamlit y el
+# propio código del frontend -- no importa nada de src/orchestration
+# directamente (habla con la API por HTTP), así que la imagen es mucho
+# más ligera que la de la API.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY frontend/ ./frontend/
+COPY src/evaluation/golden_questions.json ./src/evaluation/golden_questions.json
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "frontend/app.py", "--server.address=0.0.0.0", "--server.port=8501"]

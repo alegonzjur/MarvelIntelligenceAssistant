@@ -25,10 +25,9 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+from src.config import OLLAMA_BASE_URL, ROUTER_MODEL
 from src.retrieval.sql_agent import get_all_tools
 from src.retrieval.vector_retriever import MarvelRetriever
-
-ROUTER_MODEL = "llama3.2:3b"  # debe soportar tool calling / structured output
 
 
 class RouteCategory(str, Enum):
@@ -71,7 +70,7 @@ narrative solo porque no piden un número.
 
 
 def _get_llm(temperature: float = 0.0) -> ChatOllama:
-    return ChatOllama(model=ROUTER_MODEL, temperature=temperature)
+    return ChatOllama(model=ROUTER_MODEL, temperature=temperature, base_url=OLLAMA_BASE_URL)
 
 
 def classify(question: str, llm: ChatOllama | None = None) -> RouteDecision:

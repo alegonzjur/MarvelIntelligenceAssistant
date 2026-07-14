@@ -24,10 +24,8 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from src.config import OLLAMA_BASE_URL, SYNTHESIS_MODEL
 from src.orchestration.router import RouteCategory, route
-
-# Selección de modelo.
-SYNTHESIS_MODEL = "llama3.2:3b"  # mismo modelo que el router; puede ajustarse por separado
 
 # Prompt para respuestas narrativas.
 NARRATIVE_PROMPT = ChatPromptTemplate.from_messages(
@@ -96,7 +94,7 @@ HYBRID_PROMPT = ChatPromptTemplate.from_messages(
 
 # Función para obtener el LLM.
 def _get_llm(temperature: float = 0.3) -> ChatOllama:
-    return ChatOllama(model=SYNTHESIS_MODEL, temperature=temperature)
+    return ChatOllama(model=SYNTHESIS_MODEL, temperature=temperature, base_url=OLLAMA_BASE_URL)
 
 
 # Función para formatear documentos.
