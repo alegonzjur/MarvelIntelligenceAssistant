@@ -22,8 +22,12 @@ import requests
 import streamlit as st
 
 API_URL = os.environ.get("MARVEL_API_URL", "http://localhost:8000")
-REQUEST_TIMEOUT = 120  # generoso: con llama3.2:3b local, una pregunta híbrida
-                        # puede implicar varias llamadas al LLM en cadena
+REQUEST_TIMEOUT = int(os.environ.get("MARVEL_REQUEST_TIMEOUT", "300"))  # 5 min: una
+    # pregunta híbrida encadena varias llamadas al LLM (clasificación, tool
+    # calling, extracción, síntesis), y en hardware modesto con el modelo
+    # recién cargado en memoria (cold start) puede superar de sobra los 120s
+    # que se usaban antes. Configurable por si tu equipo lo necesita aún
+    # más alto: MARVEL_REQUEST_TIMEOUT=600 streamlit run frontend/app.py
 
 GOLDEN_QUESTIONS_PATH = (
     Path(__file__).resolve().parents[1] / "src" / "evaluation" / "golden_questions.json"
@@ -108,6 +112,26 @@ def handle_question(question: str) -> None:
         try:
             result = ask_api(question)
             st.session_state.messages.append({"role": "assistant", "content": result})
+        except requests.exceptions.Timeout:
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": {
+                        "answer": (
+                            f"La API tardó más de {REQUEST_TIMEOUT}s en responder. Si es la "
+                            "primera pregunta después de un rato sin usar el proyecto, "
+                            "puede que Ollama esté cargando el modelo en memoria por "
+                            "primera vez (cold start) -- prueba a repetir la pregunta, "
+                            "normalmente la segunda vez es mucho más rápida. Si sigue "
+                            "fallando, comprueba que Ollama está corriendo "
+                            "(`curl http://localhost:11434`)."
+                        ),
+                        "category": None,
+                        "sources": [],
+                        "tools_used": [],
+                    },
+                }
+            )
         except requests.exceptions.ConnectionError:
             st.session_state.messages.append(
                 {
